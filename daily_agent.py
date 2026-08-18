@@ -12,6 +12,7 @@ EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 CHAT_MODEL = "amazon.nova-lite-v1:0"
 
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
+ses = boto3.client("ses", region_name=REGION)
 conn = psycopg2.connect(os.environ["DB_URL"])
 
 
@@ -49,13 +50,25 @@ def compose(focus, habits, source):
     return out["output"]["message"]["content"][0]["text"].strip()
 
 
+def send_email(to_address, day_index, plan):
+    r = ses.send_email(
+        Source=os.environ["SES_FROM"],
+        Destination={"ToAddresses": [to_address]},
+        Message={
+            "Subject": {"Data": "Your sleepfix - day " + str(day_index) + " of 66"},
+            "Body": {"Text": {"Data": plan + "\n\n-- agentrecall"}},
+        },
+    )
+    return r["MessageId"]
+
+
 def run(order_id):
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT habits FROM thieves WHERE order_id = %s",
-        (order_id,),
-    )
+    cur.execute("SELECT email FROM orders WHERE order_id = %s", (order_id,))
+    email = os.environ.get("SES_TO") or cur.fetchone()[0]
+
+    cur.execute("SELECT habits FROM thieves WHERE order_id = %s", (order_id,))
     habits = cur.fetchone()[0]
     print("thieves on file:", habits)
 
@@ -91,6 +104,9 @@ def run(order_id):
     print("\n--- plan ---")
     print(plan)
     print()
+
+    message_id = send_email(email, day_index, plan)
+    print("sent to", email, "- SES message id", message_id)
 
     cur.execute(
         "INSERT INTO sends (order_id, corpus_id, day_index, plan_text) "
